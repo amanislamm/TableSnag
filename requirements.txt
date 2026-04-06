@@ -1,0 +1,10 @@
+playwright
+playwright-stealth
+fastapi
+uvicorn
+celery
+redis
+supabase
+stripe
+twilio
+python-dotenv

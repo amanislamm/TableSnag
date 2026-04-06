@@ -1,0 +1,21 @@
+{
+  "name": "courtssniper",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "axios": "^1.13.6",
+    "dotenv": "^17.3.1",
+    "node-cron": "^4.2.1",
+    "nodemailer": "^8.0.2",
+    "playwright": "^1.58.2",
+    "twilio": "^5.13.0"
+  }
+}
