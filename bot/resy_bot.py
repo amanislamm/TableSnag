@@ -12,6 +12,8 @@ from playwright_stealth import Stealth
 
 load_dotenv()
 
+DRY_RUN = os.getenv('DRY_RUN', 'true').lower() == 'true'
+
 
 class ResyBot:
     def __init__(self, email: str, password: str, proxy: Optional[str] = None) -> None:
@@ -229,6 +231,43 @@ class ResyBot:
             print(f'Fast check error {venue_slug} {date}: {e}')
             return []
 
+    async def book_slot(
+        self,
+        client: httpx.AsyncClient,
+        slug: str,
+        date: str,
+        time: str,
+        token: str,
+    ) -> bool:
+        if DRY_RUN:
+            print(f'DRY RUN - would book: {slug} {date} {time} with token {token[:50]}')
+            return True
+        try:
+            payment_method_id = os.getenv('RESY_PAYMENT_METHOD_ID', '').strip()
+            payload: dict[str, str] = {'config_id': token}
+            if payment_method_id:
+                payload['payment_method_id'] = payment_method_id
+            headers = {
+                'authorization': self.api_key or '',
+                'x-resy-auth-token': self.auth_token or '',
+                'x-resy-universal-app': 'true',
+                'accept': 'application/json',
+                'content-type': 'application/json',
+                'origin': 'https://resy.com',
+                'referer': 'https://resy.com/',
+                'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            }
+            r = await client.post(
+                'https://api.resy.com/3/book',
+                json=payload,
+                headers=headers,
+            )
+            print('book_slot status:', r.status_code, r.text[:200])
+            return r.is_success
+        except Exception as e:
+            print('book_slot error:', e)
+            return False
+
     async def resolve_venue_ids(self, page, slugs):
         self.venue_id_cache = {}
         for slug in slugs:
@@ -302,6 +341,7 @@ async def main() -> None:
         'the-corner-store-nyc',
         'ato-boy',
         'atoboy',
+        'laser-wolf-brooklyn',
         'carbone',
     ]
 
@@ -405,6 +445,13 @@ async def main() -> None:
                                             target['slug'],
                                             target['date'],
                                             slot['time'],
+                                        )
+                                        await bot.book_slot(
+                                            client,
+                                            target['slug'],
+                                            target['date'],
+                                            slot['time'],
+                                            slot['token'],
                                         )
                             await asyncio.sleep(0.5)
 
