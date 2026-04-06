@@ -1,5 +1,6 @@
 import asyncio
 import os
+import traceback
 from typing import Optional
 from datetime import datetime, date, timedelta
 
@@ -20,6 +21,37 @@ class ResyBot:
         self.auth_token: Optional[str] = None
         self.api_key: Optional[str] = None
         self.venue_id_cache: dict[str, str] = {}
+        self._first_check_done: bool = False
+        self.alerted_slots: set[str] = set()
+
+    async def send_slot_sms_alert_if_new(self, slug: str, date: str, slot_time: str) -> None:
+        key = f'{slug}_{date}_{slot_time}'
+        if key in self.alerted_slots:
+            return
+
+        account_sid = os.getenv('TWILIO_ACCOUNT_SID', '').strip()
+        auth_token = os.getenv('TWILIO_AUTH_TOKEN', '').strip()
+        from_num = os.getenv('TWILIO_FROM_NUMBER', '').strip()
+        to_num = os.getenv('TWILIO_TO_NUMBER', '').strip()
+
+        body = (
+            f'TableSnag: slot at {slug} on {date} at {slot_time} (party check in app).'
+        )
+
+        if not (account_sid and auth_token and from_num and to_num):
+            print('SMS not configured (set Twilio env vars); would alert:', key)
+            self.alerted_slots.add(key)
+            return
+
+        def _send() -> None:
+            from twilio.rest import Client
+
+            client = Client(account_sid, auth_token)
+            client.messages.create(body=body, from_=from_num, to=to_num)
+
+        await asyncio.to_thread(_send)
+        self.alerted_slots.add(key)
+        print('SMS sent for', key)
 
     async def login(self, page: Page) -> bool:
         await page.goto('https://resy.com')
@@ -175,6 +207,11 @@ class ResyBot:
                 'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             }
             r = await client.get(url, params=params, headers=headers)
+            if not self._first_check_done:
+                print(
+                    f'Fast check {venue_slug} {date}: status={r.status_code} body={r.text[:200]}'
+                )
+                self._first_check_done = True
             data = r.json()
             venues = data.get('results', {}).get('venues', [])
             if not venues:
@@ -207,6 +244,8 @@ class ResyBot:
                 await page.goto(f'https://resy.com/cities/ny/{slug}')
                 await page.wait_for_load_state('domcontentloaded')
                 await asyncio.sleep(3)
+                actual_url = page.url
+                print(f'Navigated to: {actual_url}')
                 page.remove_listener('request', handle)
 
                 if captured_id:
@@ -258,97 +297,137 @@ async def main() -> None:
     bot = ResyBot(email=email, password=password, proxy=proxy)
     proxy_config = {'server': proxy} if proxy else None
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False)
-        context = await browser.new_context(
-            viewport={'width': 1280, 'height': 800},
-            proxy=proxy_config,
-        )
+    restaurants = [
+        '4-charles-prime-rib',
+        'the-corner-store-nyc',
+        'ato-boy',
+        'atoboy',
+        'carbone',
+    ]
 
-        stealth = Stealth()
-        await stealth.apply_stealth_async(context)
-
-        page = await context.new_page()
-        ok = await bot.login(page)
-        print('Login result:', ok)
-        if ok:
-            restaurants = [
-                '4-charles-prime-rib',
-                'the-corner-store',
-                'ato-boy',
-                'carbone',
-            ]
-
-            # Resolve venue IDs once on startup
-            await bot.resolve_venue_ids(page, restaurants)
-            print('Venue ID cache:', bot.venue_id_cache)
-
-            # Build targets: Friday/Saturday/Sunday only, dates March 18 - April 30
-            targets = []
-            d = date(2026, 3, 18)
-            end = date(2026, 4, 30)
-            while d <= end:
-                if d.weekday() in [4, 5, 6]:  # Friday=4, Saturday=5, Sunday=6
-                    for slug in restaurants:
-                        targets.append(
-                            {
-                                'slug': slug,
-                                'date': d.strftime('%Y-%m-%d'),
-                                'party_size': 4,
-                            }
-                        )
-                d += timedelta(days=1)
-
-            print(f'Total targets: {len(targets)} (Fri/Sat/Sun only)')
-
-            cycle = 0
-            async with httpx.AsyncClient(timeout=10) as client:
-                while True:
-                    cycle += 1
-                    found = []
-                    for target in targets:
-                        slots = await bot.check_availability_fast(
-                            client,
-                            target['slug'],
-                            target['date'],
-                            target['party_size'],
-                        )
-                        if slots:
-                            for slot in slots:
-                                hour = int(slot['time'].split(' ')[1].split(':')[0])
-                                if 17 <= hour <= 21:
-                                    found.append(
-                                        {
-                                            'restaurant': target['slug'],
-                                            'date': target['date'],
-                                            'slot': slot,
-                                        }
-                                    )
-                                    print(
-                                        '*** SLOT FOUND: '
-                                        + target['slug']
-                                        + ' '
-                                        + target['date']
-                                        + ' '
-                                        + slot['time']
-                                        + ' ***'
-                                    )
-                        await asyncio.sleep(0.5)
-
-                    print(
-                        '['
-                        + datetime.now().strftime('%H:%M:%S')
-                        + '] Cycle '
-                        + str(cycle)
-                        + ' complete — '
-                        + str(len(targets))
-                        + ' targets, '
-                        + str(len(found))
-                        + ' prime slots found. Sleeping 60s.'
+    def build_targets() -> list[dict]:
+        targets_local: list[dict] = []
+        d = date(2026, 3, 18)
+        end = date(2026, 4, 30)
+        while d <= end:
+            if d.weekday() in [4, 5, 6]:
+                for slug in restaurants:
+                    targets_local.append(
+                        {
+                            'slug': slug,
+                            'date': d.strftime('%Y-%m-%d'),
+                            'party_size': 4,
+                        }
                     )
-                    await asyncio.sleep(60)
+            d += timedelta(days=1)
+        return targets_local
 
-        await browser.close()
+    while True:
+        try:
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=False)
+                context = await browser.new_context(
+                    viewport={'width': 1280, 'height': 800},
+                    proxy=proxy_config,
+                )
+
+                stealth = Stealth()
+                await stealth.apply_stealth_async(context)
+
+                page = await context.new_page()
+                ok = await bot.login(page)
+                print('Login result:', ok)
+                if not ok:
+                    raise RuntimeError('Login failed')
+
+                await bot.resolve_venue_ids(page, restaurants)
+                print('Venue ID cache:', bot.venue_id_cache)
+
+                targets = build_targets()
+                print(f'Total targets: {len(targets)} (Fri/Sat/Sun only)')
+
+                cycle = 0
+
+                async def refresh_browser_session() -> None:
+                    nonlocal browser, context, page
+                    print('Refreshing browser session (token / context reset)...')
+                    await browser.close()
+                    browser = await p.chromium.launch(headless=False)
+                    context = await browser.new_context(
+                        viewport={'width': 1280, 'height': 800},
+                        proxy=proxy_config,
+                    )
+                    await stealth.apply_stealth_async(context)
+                    page = await context.new_page()
+                    login_ok = await bot.login(page)
+                    if not login_ok:
+                        raise RuntimeError('Login failed after browser refresh')
+                    await bot.resolve_venue_ids(page, restaurants)
+                    print('Venue ID cache after refresh:', bot.venue_id_cache)
+
+                async with httpx.AsyncClient(timeout=10) as client:
+                    while True:
+                        if cycle >= 50:
+                            await refresh_browser_session()
+                            cycle = 0
+
+                        cycle += 1
+                        found = []
+                        bot._first_check_done = False
+                        for target in targets:
+                            slots = await bot.check_availability_fast(
+                                client,
+                                target['slug'],
+                                target['date'],
+                                target['party_size'],
+                            )
+                            if slots:
+                                for slot in slots:
+                                    hour = int(slot['time'].split(' ')[1].split(':')[0])
+                                    if 17 <= hour <= 21:
+                                        found.append(
+                                            {
+                                                'restaurant': target['slug'],
+                                                'date': target['date'],
+                                                'slot': slot,
+                                            }
+                                        )
+                                        print(
+                                            '*** SLOT FOUND: '
+                                            + target['slug']
+                                            + ' '
+                                            + target['date']
+                                            + ' '
+                                            + slot['time']
+                                            + ' ***'
+                                        )
+                                        await bot.send_slot_sms_alert_if_new(
+                                            target['slug'],
+                                            target['date'],
+                                            slot['time'],
+                                        )
+                            await asyncio.sleep(0.5)
+
+                        print(
+                            '['
+                            + datetime.now().strftime('%H:%M:%S')
+                            + '] Cycle '
+                            + str(cycle)
+                            + ' complete — '
+                            + str(len(targets))
+                            + ' targets, '
+                            + str(len(found))
+                            + ' prime slots found. Sleeping 60s.'
+                        )
+                        await asyncio.sleep(60)
+
+        except KeyboardInterrupt:
+            raise
+        except Exception as e:
+            traceback.print_exc()
+            print('Session crashed or error:', e)
+            print('Restarting full session in 30 seconds...')
+            await asyncio.sleep(30)
 
 
 if __name__ == '__main__':
