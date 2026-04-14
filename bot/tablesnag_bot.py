@@ -68,7 +68,9 @@ class TableSnagBot:
                 try:
                     body = await response.json()
                     print('AUTH REFRESH RESPONSE:', str(body)[:300])
-                    token = body.get('token') or body.get('access_token')
+                    token = body.get('token')
+                    if not token:
+                        token = body.get('access_token')
                     if token:
                         self.auth_token = token
                         print('Got real access token from refresh endpoint')
@@ -118,13 +120,13 @@ class TableSnagBot:
 
             await page.screenshot(path='debug_after_login.png')
             page.on('response', _handle_auth_response)
-            try:
-                await page.goto('https://resy.com/cities/ny')
-                await page.wait_for_load_state('domcontentloaded')
-                await asyncio.sleep(4)
-                await asyncio.sleep(3)
-            finally:
-                page.remove_listener('response', _handle_auth_response)
+            await page.goto('https://resy.com/cities/ny')
+            await page.wait_for_load_state('domcontentloaded')
+            await asyncio.sleep(4)
+            await asyncio.sleep(3)
+            await asyncio.sleep(5)
+            print(f'AUTH TOKEN AFTER REFRESH: {(self.auth_token or "")[:50]}')
+            page.remove_listener('response', _handle_auth_response)
 
             cookies = await page.context.cookies()
             auth_token: Optional[str] = None
@@ -140,50 +142,20 @@ class TableSnagBot:
                 '''() => { const keys = Object.keys(localStorage); for (const k of keys) { const lk = k.toLowerCase(); const v = localStorage.getItem(k); if (!v) continue; if (lk.includes('authorization') || (lk.includes('api') && lk.includes('key')) || v.toLowerCase().includes('resyapi api_key')) { return v; } } return null; }'''
             )
 
-            if auth_token:
+            _access_jwt_prefix = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJFUzI1NiJ9'
+            if auth_token and not (
+                self.auth_token and self.auth_token.startswith(_access_jwt_prefix)
+            ):
                 self.auth_token = auth_token
             if api_key:
                 self.api_key = api_key
 
-            await self.refresh_auth_token()
-
             print(f'FINAL API KEY: {self.api_key}')
-            print(f'FINAL AUTH TOKEN: {self.auth_token[:40]}')
+            print(f'FINAL AUTH TOKEN: {(self.auth_token or "")[:40]}')
 
             return True
         finally:
             page.remove_listener('request', _on_request)
-
-    async def refresh_auth_token(self) -> None:
-        try:
-            async with httpx.AsyncClient() as client:
-                r = await client.post(
-                    'https://api.resy.com/3/auth/token',
-                    headers={
-                        'authorization': self.api_key,
-                        'content-type': 'application/x-www-form-urlencoded',
-                        'origin': 'https://resy.com',
-                        'referer': 'https://resy.com/',
-                        'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-                    },
-                    data={'token': self.auth_token},
-                )
-                print(f'Token refresh status: {r.status_code}')
-                print(f'Token refresh body: {r.text[:300]}')
-                if r.status_code == 200:
-                    data = r.json()
-                    new_token = (
-                        data.get('token')
-                        or data.get('access_token')
-                        or data.get('auth_token')
-                    )
-                    if new_token:
-                        self.auth_token = new_token
-                        print(f'Auth token refreshed successfully: {new_token[:30]}')
-                    else:
-                        print('Token field not found in response, keys:', list(data.keys()))
-        except Exception as e:
-            print(f'Token refresh error: {e}')
 
     async def check_availability(self, page, venue_slug, date, party_size):
         try:
@@ -450,6 +422,8 @@ async def main() -> None:
                 print('Login result:', ok)
                 if not ok:
                     raise RuntimeError('Login failed')
+
+                print(f'Using auth token: {(bot.auth_token or "")[:50]}')
 
                 await bot.resolve_venue_ids(page, restaurants)
                 print('Venue ID cache:', bot.venue_id_cache)
