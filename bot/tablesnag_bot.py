@@ -15,7 +15,7 @@ load_dotenv()
 DRY_RUN = os.getenv('DRY_RUN', 'true').lower() == 'true'
 
 
-class ResyBot:
+class TableSnagBot:
     def __init__(self, email: str, password: str, proxy: Optional[str] = None) -> None:
         self.email = email
         self.password = password
@@ -333,7 +333,7 @@ async def main() -> None:
         print('Set RESY_EMAIL and RESY_PASSWORD in .env')
         return
 
-    bot = ResyBot(email=email, password=password, proxy=proxy)
+    bot = TableSnagBot(email=email, password=password, proxy=proxy)
     proxy_config = {'server': proxy} if proxy else None
 
     restaurants = [

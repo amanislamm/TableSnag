@@ -1,5 +1,5 @@
 """
-TableSnag Resy Bot — Playwright-based bot for checking availability and booking on Resy.
+TableSnag — Playwright-based bot for checking availability and booking on Resy.
 Uses playwright-stealth and realistic delays to avoid detection.
 """
 
@@ -25,7 +25,7 @@ def _random_delay() -> float:
     return random.uniform(0.5, 1.5)
 
 
-class ResyBot:
+class TableSnagBot:
     """
     Bot for logging into Resy, checking venue availability, and booking slots.
     Uses optional proxy and stealth to reduce detection risk.
