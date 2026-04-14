@@ -80,7 +80,8 @@ class TableSnagBot:
         page.on('request', _on_request)
         try:
             await page.goto('https://resy.com')
-            await page.wait_for_load_state('networkidle')
+            await page.wait_for_load_state('domcontentloaded')
+            await asyncio.sleep(2)
 
             # Dismiss cookie consent banner if present
             try:
@@ -250,9 +251,6 @@ class TableSnagBot:
                 'sec-fetch-site': 'same-site',
                 'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
             }
-            api_dbg = (self.api_key or '')[:20]
-            auth_dbg = (self.auth_token or '')[:20]
-            print(f'Tokens: api={api_dbg} auth={auth_dbg}')
             r = await client.get(url, params=params, headers=headers)
             if not self._first_check_done:
                 print(
