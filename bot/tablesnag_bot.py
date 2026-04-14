@@ -63,6 +63,18 @@ class TableSnagBot:
                 if authz:
                     self.api_key = authz
 
+        async def _handle_auth_response(response) -> None:
+            if 'api.resy.com/3/auth/refresh' in response.url:
+                try:
+                    body = await response.json()
+                    print('AUTH REFRESH RESPONSE:', str(body)[:300])
+                    token = body.get('token') or body.get('access_token')
+                    if token:
+                        self.auth_token = token
+                        print('Got real access token from refresh endpoint')
+                except Exception as e:
+                    print('Auth refresh parse error:', e)
+
         page.on('request', _on_request)
         try:
             await page.goto('https://resy.com')
@@ -105,10 +117,14 @@ class TableSnagBot:
             await asyncio.sleep(3)
 
             await page.screenshot(path='debug_after_login.png')
-            await page.goto('https://resy.com/cities/ny')
-            await page.wait_for_load_state('domcontentloaded')
-            await asyncio.sleep(4)
-            await asyncio.sleep(3)
+            page.on('response', _handle_auth_response)
+            try:
+                await page.goto('https://resy.com/cities/ny')
+                await page.wait_for_load_state('domcontentloaded')
+                await asyncio.sleep(4)
+                await asyncio.sleep(3)
+            finally:
+                page.remove_listener('response', _handle_auth_response)
 
             cookies = await page.context.cookies()
             auth_token: Optional[str] = None
@@ -124,9 +140,12 @@ class TableSnagBot:
                 '''() => { const keys = Object.keys(localStorage); for (const k of keys) { const lk = k.toLowerCase(); const v = localStorage.getItem(k); if (!v) continue; if (lk.includes('authorization') || (lk.includes('api') && lk.includes('key')) || v.toLowerCase().includes('resyapi api_key')) { return v; } } return null; }'''
             )
 
-            self.auth_token = auth_token if auth_token else ''
+            if auth_token:
+                self.auth_token = auth_token
             if api_key:
                 self.api_key = api_key
+
+            await self.refresh_auth_token()
 
             print(f'FINAL API KEY: {self.api_key}')
             print(f'FINAL AUTH TOKEN: {self.auth_token[:40]}')
@@ -134,6 +153,37 @@ class TableSnagBot:
             return True
         finally:
             page.remove_listener('request', _on_request)
+
+    async def refresh_auth_token(self) -> None:
+        try:
+            async with httpx.AsyncClient() as client:
+                r = await client.post(
+                    'https://api.resy.com/3/auth/token',
+                    headers={
+                        'authorization': self.api_key,
+                        'content-type': 'application/x-www-form-urlencoded',
+                        'origin': 'https://resy.com',
+                        'referer': 'https://resy.com/',
+                        'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+                    },
+                    data={'token': self.auth_token},
+                )
+                print(f'Token refresh status: {r.status_code}')
+                print(f'Token refresh body: {r.text[:300]}')
+                if r.status_code == 200:
+                    data = r.json()
+                    new_token = (
+                        data.get('token')
+                        or data.get('access_token')
+                        or data.get('auth_token')
+                    )
+                    if new_token:
+                        self.auth_token = new_token
+                        print(f'Auth token refreshed successfully: {new_token[:30]}')
+                    else:
+                        print('Token field not found in response, keys:', list(data.keys()))
+        except Exception as e:
+            print(f'Token refresh error: {e}')
 
     async def check_availability(self, page, venue_slug, date, party_size):
         try:
