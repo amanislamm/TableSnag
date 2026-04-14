@@ -200,14 +200,22 @@ class TableSnagBot:
                 'venue_id': self.venue_id_cache.get(venue_slug, ''),
             }
             headers = {
-                'authorization': self.api_key or '',
-                'x-resy-auth-token': self.auth_token or '',
+                'authorization': self.api_key if self.api_key is not None else '',
+                'x-resy-auth-token': self.auth_token if self.auth_token is not None else '',
                 'x-resy-universal-app': 'true',
-                'accept': 'application/json',
+                'accept': 'application/json, text/plain, */*',
+                'accept-language': 'en-US,en;q=0.9',
+                'cache-control': 'no-cache',
                 'origin': 'https://resy.com',
                 'referer': 'https://resy.com/',
-                'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'sec-fetch-dest': 'empty',
+                'sec-fetch-mode': 'cors',
+                'sec-fetch-site': 'same-site',
+                'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
             }
+            api_dbg = (self.api_key or '')[:20]
+            auth_dbg = (self.auth_token or '')[:20]
+            print(f'Tokens: api={api_dbg} auth={auth_dbg}')
             r = await client.get(url, params=params, headers=headers)
             if not self._first_check_done:
                 print(
@@ -338,8 +346,6 @@ async def main() -> None:
 
     restaurants = [
         '4-charles-prime-rib',
-        'the-corner-store-nyc',
-        'ato-boy',
         'atoboy',
         'laser-wolf-brooklyn',
         'carbone',
