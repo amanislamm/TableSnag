@@ -20,8 +20,8 @@ class TableSnagBot:
         self.email = email
         self.password = password
         self.proxy = proxy
-        self.auth_token: Optional[str] = None
-        self.api_key: Optional[str] = None
+        self.auth_token = ''
+        self.api_key = 'ResyAPI api_key="VbWk7s3L4KiK5fzlO7JD3Q5EYolJI7n5"'
         self.venue_id_cache: dict[str, str] = {}
         self._first_check_done: bool = False
         self.alerted_slots: set[str] = set()
@@ -56,69 +56,84 @@ class TableSnagBot:
         print('SMS sent for', key)
 
     async def login(self, page: Page) -> bool:
-        await page.goto('https://resy.com')
-        await page.wait_for_load_state('networkidle')
+        def _on_request(request) -> None:
+            headers = request.headers
+            if 'authorization' in headers and headers['authorization'].startswith('ResyAPI'):
+                authz = headers['authorization']
+                if authz:
+                    self.api_key = authz
 
-        # Dismiss cookie consent banner if present
+        page.on('request', _on_request)
         try:
-            consent = page.locator(
-                '#user-consent-management-granular-banner-overlay, [id*="consent"], [id*="cookie"], [class*="cookie-banner"], [class*="consent-banner"]'
-            )
-            accept_btn = page.locator(
-                'button:has-text("Accept"), button:has-text("Accept All"), button:has-text("Agree"), button:has-text("OK"), button:has-text("Got it")'
-            )
-            await accept_btn.first.click(timeout=5000)
-            print('Cookie banner dismissed')
+            await page.goto('https://resy.com')
+            await page.wait_for_load_state('networkidle')
+
+            # Dismiss cookie consent banner if present
+            try:
+                consent = page.locator(
+                    '#user-consent-management-granular-banner-overlay, [id*="consent"], [id*="cookie"], [class*="cookie-banner"], [class*="consent-banner"]'
+                )
+                accept_btn = page.locator(
+                    'button:has-text("Accept"), button:has-text("Accept All"), button:has-text("Agree"), button:has-text("OK"), button:has-text("Got it")'
+                )
+                await accept_btn.first.click(timeout=5000)
+                print('Cookie banner dismissed')
+                await asyncio.sleep(1)
+            except Exception:
+                print('No cookie banner found, continuing')
+
+            await asyncio.sleep(2)
+
+            await page.get_by_text('Log in', exact=True).click()
+            await asyncio.sleep(2)
+
+            texts = await page.locator('a, button').all_text_contents()
+            print('MODAL ELEMENTS:', texts)
+
+            await page.screenshot(path='debug_modal.png')
+
+            await page.get_by_text('Log in with email & password').click()
+            await asyncio.sleep(2)
+
+            await page.locator('input[type=email]').fill(self.email)
             await asyncio.sleep(1)
-        except Exception:
-            print('No cookie banner found, continuing')
 
-        await asyncio.sleep(2)
+            await page.locator('input[type=password]').fill(self.password)
+            await asyncio.sleep(1)
 
-        await page.get_by_text('Log in', exact=True).click()
-        await asyncio.sleep(2)
+            await page.locator('button[type=submit]').click()
+            await asyncio.sleep(3)
 
-        texts = await page.locator('a, button').all_text_contents()
-        print('MODAL ELEMENTS:', texts)
+            await page.screenshot(path='debug_after_login.png')
+            await page.goto('https://resy.com/cities/ny')
+            await page.wait_for_load_state('domcontentloaded')
+            await asyncio.sleep(4)
+            await asyncio.sleep(3)
 
-        await page.screenshot(path='debug_modal.png')
+            cookies = await page.context.cookies()
+            auth_token: Optional[str] = None
+            for cookie in cookies:
+                name = (cookie.get('name') or '').lower()
+                if 'token' in name or 'auth' in name or 'resy' in name:
+                    value = cookie.get('value')
+                    if value:
+                        auth_token = value
+                        break
 
-        await page.get_by_text('Log in with email & password').click()
-        await asyncio.sleep(2)
+            api_key: Optional[str] = await page.evaluate(
+                '''() => { const keys = Object.keys(localStorage); for (const k of keys) { const lk = k.toLowerCase(); const v = localStorage.getItem(k); if (!v) continue; if (lk.includes('authorization') || (lk.includes('api') && lk.includes('key')) || v.toLowerCase().includes('resyapi api_key')) { return v; } } return null; }'''
+            )
 
-        await page.locator('input[type=email]').fill(self.email)
-        await asyncio.sleep(1)
+            self.auth_token = auth_token if auth_token else ''
+            if api_key:
+                self.api_key = api_key
 
-        await page.locator('input[type=password]').fill(self.password)
-        await asyncio.sleep(1)
+            print(f'FINAL API KEY: {self.api_key}')
+            print(f'FINAL AUTH TOKEN: {self.auth_token[:40]}')
 
-        await page.locator('button[type=submit]').click()
-        await asyncio.sleep(3)
-
-        await page.screenshot(path='debug_after_login.png')
-        await page.goto('https://resy.com/cities/ny')
-        await page.wait_for_load_state('domcontentloaded')
-        await asyncio.sleep(4)
-        await asyncio.sleep(3)
-
-        cookies = await page.context.cookies()
-        auth_token: Optional[str] = None
-        for cookie in cookies:
-            name = (cookie.get('name') or '').lower()
-            if 'token' in name or 'auth' in name or 'resy' in name:
-                value = cookie.get('value')
-                if value:
-                    auth_token = value
-                    break
-
-        api_key: Optional[str] = await page.evaluate(
-            '''() => { const keys = Object.keys(localStorage); for (const k of keys) { const lk = k.toLowerCase(); const v = localStorage.getItem(k); if (!v) continue; if (lk.includes('authorization') || (lk.includes('api') && lk.includes('key')) || v.toLowerCase().includes('resyapi api_key')) { return v; } } return null; }'''
-        )
-
-        self.auth_token = auth_token
-        self.api_key = api_key
-
-        return True
+            return True
+        finally:
+            page.remove_listener('request', _on_request)
 
     async def check_availability(self, page, venue_slug, date, party_size):
         try:
