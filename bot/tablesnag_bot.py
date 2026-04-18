@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import traceback
 from typing import Optional
@@ -276,39 +277,86 @@ class TableSnagBot:
 
     async def book_slot(
         self,
-        client: httpx.AsyncClient,
         slug: str,
         date: str,
-        time: str,
-        token: str,
+        time_str: str,
+        config_token: str,
+        party_size: int = 4,
     ) -> bool:
         if DRY_RUN:
-            print(f'DRY RUN - would book: {slug} {date} {time} with token {token[:50]}')
+            print(
+                f'DRY RUN - would book: {slug} {date} {time_str} with config token {config_token[:50]}'
+            )
             return True
         try:
-            payment_method_id = os.getenv('RESY_PAYMENT_METHOD_ID', '').strip()
-            payload: dict[str, str] = {'config_id': token}
-            if payment_method_id:
-                payload['payment_method_id'] = payment_method_id
             headers = {
-                'authorization': self.api_key or '',
-                'x-resy-auth-token': self.auth_token or '',
+                'authorization': self.api_key,
+                'x-resy-auth-token': self.auth_token,
                 'x-resy-universal-app': 'true',
-                'accept': 'application/json',
-                'content-type': 'application/json',
+                'accept': 'application/json, text/plain, */*',
                 'origin': 'https://resy.com',
                 'referer': 'https://resy.com/',
-                'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'content-type': 'application/x-www-form-urlencoded',
+                'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
             }
-            r = await client.post(
-                'https://api.resy.com/3/book',
-                json=payload,
-                headers=headers,
-            )
-            print('book_slot status:', r.status_code, r.text[:200])
-            return r.is_success
+
+            async with httpx.AsyncClient(timeout=10) as client:
+                details_r = await client.post(
+                    'https://api.resy.com/3/details',
+                    headers=headers,
+                    data={
+                        'config_id': config_token,
+                        'party_size': str(party_size),
+                        'day': date,
+                    },
+                )
+                print(
+                    f'Details status: {details_r.status_code} body: {details_r.text[:300]}'
+                )
+
+                if details_r.status_code != 200:
+                    print(f'Failed to get details: {details_r.text}')
+                    return False
+
+                details = details_r.json()
+                book_token = details.get('book_token', {}).get('value')
+                payment_method_id = os.getenv('RESY_PAYMENT_METHOD_ID', '').strip()
+
+                if not book_token:
+                    print(
+                        f'No book token in details response. Keys: {list(details.keys())}'
+                    )
+                    return False
+
+                if not payment_method_id:
+                    print('RESY_PAYMENT_METHOD_ID not set; cannot complete booking.')
+                    return False
+
+                print(f'Got book token: {book_token[:40]}')
+
+                book_r = await client.post(
+                    'https://api.resy.com/3/book',
+                    headers=headers,
+                    data={
+                        'book_token': book_token,
+                        'struct_payment_method': json.dumps(
+                            {'id': int(payment_method_id)}
+                        ),
+                        'source_id': 'resy.com-venue-details',
+                    },
+                )
+                print(f'Book status: {book_r.status_code} body: {book_r.text[:300]}')
+
+                if book_r.status_code == 201:
+                    print(
+                        f'*** SUCCESSFULLY BOOKED: {slug} {date} {time_str} ***'
+                    )
+                    return True
+                print(f'Booking failed: {book_r.text}')
+                return False
+
         except Exception as e:
-            print('book_slot error:', e)
+            print(f'book_slot error: {e}')
             return False
 
     async def resolve_venue_ids(self, page, slugs):
@@ -490,11 +538,11 @@ async def main() -> None:
                                             slot['time'],
                                         )
                                         await bot.book_slot(
-                                            client,
                                             target['slug'],
                                             target['date'],
                                             slot['time'],
                                             slot['token'],
+                                            party_size=target['party_size'],
                                         )
                             await asyncio.sleep(0.5)
 
