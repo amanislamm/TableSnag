@@ -2,7 +2,6 @@ import asyncio
 import json
 import os
 import traceback
-from urllib.parse import quote
 from typing import Optional
 from datetime import datetime, date, timedelta
 
@@ -293,36 +292,35 @@ class TableSnagBot:
             headers = {
                 'authorization': self.api_key,
                 'x-resy-auth-token': self.auth_token,
+                'x-resy-universal-auth': self.auth_token,
                 'x-resy-universal-app': 'true',
                 'accept': 'application/json, text/plain, */*',
                 'origin': 'https://resy.com',
                 'referer': 'https://resy.com/',
                 'content-type': 'application/x-www-form-urlencoded',
-                'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+                'user-agent': (
+                    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+                    'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36'
+                ),
+                'x-origin': 'https://resy.com',
+                'cache-control': 'no-cache',
             }
 
             async with httpx.AsyncClient(timeout=10) as client:
-                encoded_config_id = quote(config_token, safe='')
-                print(
-                    f'Sending to /3/details: config_id={encoded_config_id[:80]} '
-                    f'day={date} party_size={party_size}'
-                )
-                details_r = await client.post(
+                details_r = await client.get(
                     'https://api.resy.com/3/details',
                     headers=headers,
-                    data={
-                        'config_id': encoded_config_id,
+                    params={
+                        'config_id': config_token,
                         'party_size': str(party_size),
                         'day': date,
-                        'venue_id': str(self.venue_id_cache.get(slug, '')),
                     },
                 )
-                print(
-                    f'Details status: {details_r.status_code} body: {details_r.text[:500]}'
-                )
+                print(f'Details status: {details_r.status_code}')
+                print(f'Details body: {details_r.text[:500]}')
 
                 if details_r.status_code != 200:
-                    print(f'Failed to get details: {details_r.text}')
+                    print('Details failed')
                     return False
 
                 details = details_r.json()
@@ -330,16 +328,14 @@ class TableSnagBot:
                 payment_method_id = os.getenv('RESY_PAYMENT_METHOD_ID', '').strip()
 
                 if not book_token:
-                    print(
-                        f'No book token in details response. Keys: {list(details.keys())}'
-                    )
+                    print(f'No book token. Response keys: {list(details.keys())}')
                     return False
 
                 if not payment_method_id:
                     print('RESY_PAYMENT_METHOD_ID not set; cannot complete booking.')
                     return False
 
-                print(f'Got book token: {book_token[:40]}')
+                print(f'Got book token: {book_token[:50]}')
 
                 book_r = await client.post(
                     'https://api.resy.com/3/book',
@@ -352,40 +348,20 @@ class TableSnagBot:
                         'source_id': 'resy.com-venue-details',
                     },
                 )
-                print(f'Book status: {book_r.status_code} body: {book_r.text[:300]}')
+                print(f'Book status: {book_r.status_code}')
+                print(f'Book body: {book_r.text[:500]}')
 
                 if book_r.status_code == 201:
                     print(
                         f'*** SUCCESSFULLY BOOKED: {slug} {date} {time_str} ***'
                     )
                     return True
-                print(f'Booking failed: {book_r.text}')
+                print(f'Booking failed: {book_r.text[:200]}')
                 return False
 
         except Exception as e:
             print(f'book_slot error: {e}')
             return False
-
-    async def sniff_booking_request(self, page: Page) -> None:
-        print(
-            'Sniffing booking requests - navigate to atoboy and try to book manually in the browser...'
-        )
-
-        def log_post(request) -> None:
-            if 'api.resy.com' in request.url and request.method == 'POST':
-                print(f'POST URL: {request.url}')
-                print(f'POST HEADERS: {dict(request.headers)}')
-                print(f'POST DATA: {request.post_data}')
-                print('---')
-
-        page.on('request', log_post)
-        await page.goto('https://resy.com/cities/ny/atoboy?date=2026-04-26&seats=4')
-        await page.wait_for_load_state('domcontentloaded')
-        print(
-            'Page loaded - manually click a time slot in the browser to book, then watch the output'
-        )
-        await asyncio.sleep(30)
-        page.remove_listener('request', log_post)
 
     async def resolve_venue_ids(self, page, slugs):
         self.venue_id_cache = {}
@@ -504,10 +480,6 @@ async def main() -> None:
 
                 targets = build_targets()
                 print(f'Total targets: {len(targets)} (Fri/Sat/Sun only)')
-
-                await bot.sniff_booking_request(page)
-                print('Temporary diagnostic mode complete; polling loop is disabled.')
-                return
 
                 cycle = 0
 
