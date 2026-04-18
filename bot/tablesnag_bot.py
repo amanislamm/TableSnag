@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import traceback
+from urllib.parse import quote
 from typing import Optional
 from datetime import datetime, date, timedelta
 
@@ -301,17 +302,23 @@ class TableSnagBot:
             }
 
             async with httpx.AsyncClient(timeout=10) as client:
+                encoded_config_id = quote(config_token, safe='')
+                print(
+                    f'Sending to /3/details: config_id={encoded_config_id[:80]} '
+                    f'day={date} party_size={party_size}'
+                )
                 details_r = await client.post(
                     'https://api.resy.com/3/details',
                     headers=headers,
                     data={
-                        'config_id': config_token,
+                        'config_id': encoded_config_id,
                         'party_size': str(party_size),
                         'day': date,
+                        'venue_id': str(self.venue_id_cache.get(slug, '')),
                     },
                 )
                 print(
-                    f'Details status: {details_r.status_code} body: {details_r.text[:300]}'
+                    f'Details status: {details_r.status_code} body: {details_r.text[:500]}'
                 )
 
                 if details_r.status_code != 200:
