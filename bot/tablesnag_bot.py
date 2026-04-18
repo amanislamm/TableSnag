@@ -366,6 +366,27 @@ class TableSnagBot:
             print(f'book_slot error: {e}')
             return False
 
+    async def sniff_booking_request(self, page: Page) -> None:
+        print(
+            'Sniffing booking requests - navigate to atoboy and try to book manually in the browser...'
+        )
+
+        def log_post(request) -> None:
+            if 'api.resy.com' in request.url and request.method == 'POST':
+                print(f'POST URL: {request.url}')
+                print(f'POST HEADERS: {dict(request.headers)}')
+                print(f'POST DATA: {request.post_data}')
+                print('---')
+
+        page.on('request', log_post)
+        await page.goto('https://resy.com/cities/ny/atoboy?date=2026-04-26&seats=4')
+        await page.wait_for_load_state('domcontentloaded')
+        print(
+            'Page loaded - manually click a time slot in the browser to book, then watch the output'
+        )
+        await asyncio.sleep(30)
+        page.remove_listener('request', log_post)
+
     async def resolve_venue_ids(self, page, slugs):
         self.venue_id_cache = {}
         for slug in slugs:
@@ -483,6 +504,10 @@ async def main() -> None:
 
                 targets = build_targets()
                 print(f'Total targets: {len(targets)} (Fri/Sat/Sun only)')
+
+                await bot.sniff_booking_request(page)
+                print('Temporary diagnostic mode complete; polling loop is disabled.')
+                return
 
                 cycle = 0
 
