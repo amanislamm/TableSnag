@@ -277,23 +277,22 @@ class TableSnagBot:
 
     async def book_slot(
         self,
-        page: Page,
-        slug: str,
-        date: str,
-        time_str: str,
-        config_token: str,
-        party_size: int = 4,
-    ) -> bool:
+        page,
+        slug,
+        date,
+        time_str,
+        config_token,
+        party_size=4,
+    ):
         if DRY_RUN:
             print(
                 f'DRY RUN - would book: {slug} {date} {time_str} with config token {config_token[:50]}'
             )
             return True
         try:
-            payment_method_id = os.getenv('RESY_PAYMENT_METHOD_ID', '').strip()
-            if not payment_method_id:
-                print('RESY_PAYMENT_METHOD_ID not set; cannot complete booking.')
-                return False
+            import json
+
+            payment_method_id = os.getenv('RESY_PAYMENT_METHOD_ID')
 
             details_response = await page.request.get(
                 'https://api.resy.com/3/details',
@@ -361,7 +360,8 @@ class TableSnagBot:
                     f'*** SUCCESSFULLY BOOKED: {slug} {date} {time_str} ***'
                 )
                 return True
-            return False
+            else:
+                return False
 
         except Exception as e:
             print(f'book_slot error: {e}')
