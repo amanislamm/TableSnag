@@ -277,13 +277,13 @@ class TableSnagBot:
 
     async def book_slot(
         self,
-        page: Page,
-        slug: str,
-        date: str,
-        time_str: str,
-        config_token: str,
-        party_size: int = 4,
-    ) -> bool:
+        page,
+        slug,
+        date,
+        time_str,
+        config_token,
+        party_size=4,
+    ):
         if DRY_RUN:
             print(
                 f'DRY RUN - would book: {slug} {date} {time_str} with config token {config_token[:50]}'
@@ -295,33 +295,51 @@ class TableSnagBot:
                 print('RESY_PAYMENT_METHOD_ID not set; cannot complete booking.')
                 return False
 
-            details_response = await page.request.get(
-                'https://api.resy.com/3/details',
-                params={
-                    'config_id': config_token,
-                    'party_size': str(party_size),
-                    'day': date,
-                },
-                headers={
-                    'authorization': self.api_key,
-                    'x-resy-auth-token': self.auth_token,
-                    'x-resy-universal-auth': self.auth_token,
-                    'x-resy-universal-app': 'true',
-                    'accept': 'application/json, text/plain, */*',
-                    'origin': 'https://resy.com',
-                    'referer': 'https://resy.com/',
-                    'x-origin': 'https://resy.com',
-                    'cache-control': 'no-cache',
+            print(f'Attempting to book {slug} {date} {time_str}')
+
+            details_result = await page.evaluate(
+                """async (args) => {
+                    const params = new URLSearchParams({
+                        config_id: args.config_token,
+                        party_size: String(args.party_size),
+                        day: args.date
+                    });
+                    const resp = await fetch(
+                        'https://api.resy.com/3/details?' + params.toString(),
+                        {
+                            method: 'GET',
+                            credentials: 'include',
+                            headers: {
+                                'authorization': args.api_key,
+                                'x-resy-auth-token': args.auth_token,
+                                'x-resy-universal-auth': args.auth_token,
+                                'x-resy-universal-app': 'true',
+                                'accept': 'application/json',
+                                'origin': 'https://resy.com',
+                                'x-origin': 'https://resy.com',
+                            }
+                        }
+                    );
+                    const text = await resp.text();
+                    return { status: resp.status, body: text };
+                }""",
+                {
+                    'config_token': config_token,
+                    'party_size': party_size,
+                    'date': date,
+                    'api_key': self.api_key,
+                    'auth_token': self.auth_token,
                 },
             )
-            print(f'Details status: {details_response.status}')
-            details_text = await details_response.text()
-            print(f'Details body: {details_text[:500]}')
 
-            if details_response.status != 200:
+            print(f'Details status: {details_result["status"]}')
+            print(f'Details body: {details_result["body"][:500]}')
+
+            if details_result['status'] != 200:
+                print('Details failed')
                 return False
 
-            details = await details_response.json()
+            details = json.loads(details_result['body'])
             book_token = details.get('book_token', {}).get('value')
 
             if not book_token:
@@ -330,37 +348,50 @@ class TableSnagBot:
 
             print(f'Got book token: {book_token[:50]}')
 
-            book_response = await page.request.post(
-                'https://api.resy.com/3/book',
-                headers={
-                    'authorization': self.api_key,
-                    'x-resy-auth-token': self.auth_token,
-                    'x-resy-universal-auth': self.auth_token,
-                    'x-resy-universal-app': 'true',
-                    'accept': 'application/json, text/plain, */*',
-                    'content-type': 'application/x-www-form-urlencoded',
-                    'origin': 'https://resy.com',
-                    'referer': 'https://resy.com/',
-                    'x-origin': 'https://resy.com',
-                    'cache-control': 'no-cache',
-                },
-                form={
+            book_result = await page.evaluate(
+                """async (args) => {
+                    const body = new URLSearchParams({
+                        book_token: args.book_token,
+                        struct_payment_method: JSON.stringify({
+                            id: parseInt(args.payment_method_id, 10)
+                        }),
+                        source_id: 'resy.com-venue-details'
+                    });
+                    const resp = await fetch('https://api.resy.com/3/book', {
+                        method: 'POST',
+                        credentials: 'include',
+                        headers: {
+                            'authorization': args.api_key,
+                            'x-resy-auth-token': args.auth_token,
+                            'x-resy-universal-auth': args.auth_token,
+                            'x-resy-universal-app': 'true',
+                            'content-type': 'application/x-www-form-urlencoded',
+                            'accept': 'application/json',
+                            'origin': 'https://resy.com',
+                            'x-origin': 'https://resy.com',
+                        },
+                        body: body.toString()
+                    });
+                    const text = await resp.text();
+                    return { status: resp.status, body: text };
+                }""",
+                {
                     'book_token': book_token,
-                    'struct_payment_method': json.dumps(
-                        {'id': int(payment_method_id)}
-                    ),
-                    'source_id': 'resy.com-venue-details',
+                    'payment_method_id': str(payment_method_id),
+                    'api_key': self.api_key,
+                    'auth_token': self.auth_token,
                 },
             )
-            print(f'Book status: {book_response.status}')
-            book_text = await book_response.text()
-            print(f'Book body: {book_text[:500]}')
 
-            if book_response.status == 201:
+            print(f'Book status: {book_result["status"]}')
+            print(f'Book body: {book_result["body"][:500]}')
+
+            if book_result['status'] == 201:
                 print(
                     f'*** SUCCESSFULLY BOOKED: {slug} {date} {time_str} ***'
                 )
                 return True
+            print('Booking failed')
             return False
 
         except Exception as e:
