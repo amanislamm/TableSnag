@@ -355,20 +355,39 @@ class TableSnagBot:
                 page.remove_listener('response', capture_book)
                 return False
 
-            await asyncio.sleep(2)
+            await asyncio.sleep(3)
 
+            print('Waiting for checkout panel...')
+            try:
+                await page.wait_for_selector(
+                    '[class*="CheckoutFlow"], [class*="checkout"], [class*="Checkout"], '
+                    '[class*="BookingFlow"], [class*="booking-flow"], '
+                    '[class*="ReservationOverlay"], [class*="Modal"], [class*="modal"], '
+                    '[class*="drawer"], [class*="Drawer"], [class*="panel"], [class*="Panel"]',
+                    timeout=8000,
+                )
+                print('Checkout panel appeared')
+            except Exception:
+                print('Checkout panel selector timed out')
+
+            await asyncio.sleep(2)
             await page.screenshot(path='debug_after_slot_click.png')
-            print('Screenshot saved - checking for booking drawer')
 
             try:
                 all_buttons = await page.locator('button').all_text_contents()
                 print(
-                    f'Buttons after slot click: {[b.strip() for b in all_buttons if b.strip()]}'
+                    f'All buttons: {[b.strip() for b in all_buttons if b.strip()]}'
                 )
-            except Exception as e:
-                print(f'Button scan error: {e}')
+            except Exception:
+                pass
 
-            await asyncio.sleep(3)
+            try:
+                book_elements = await page.locator(
+                    '[class*="book" i], [class*="reserve" i], [class*="checkout" i]'
+                ).all_text_contents()
+                print(f'Book-related elements: {book_elements[:10]}')
+            except Exception:
+                pass
 
             book_clicked = False
             for selector in [
