@@ -290,78 +290,100 @@ class TableSnagBot:
             )
             return True
         try:
-            import json
-
-            payment_method_id = os.getenv('RESY_PAYMENT_METHOD_ID')
-
-            details_response = await page.request.get(
-                'https://api.resy.com/3/details',
-                params={
-                    'config_id': config_token,
-                    'party_size': str(party_size),
-                    'day': date,
-                },
-                headers={
-                    'authorization': self.api_key,
-                    'x-resy-auth-token': self.auth_token,
-                    'x-resy-universal-auth': self.auth_token,
-                    'x-resy-universal-app': 'true',
-                    'accept': 'application/json, text/plain, */*',
-                    'origin': 'https://resy.com',
-                    'referer': 'https://resy.com/',
-                    'x-origin': 'https://resy.com',
-                    'cache-control': 'no-cache',
-                },
+            # Extract just the time portion e.g. "17:00"
+            time_display = (
+                time_str.split(' ')[1][:5] if ' ' in time_str else time_str[:5]
             )
-            print(f'Details status: {details_response.status}')
-            details_text = await details_response.text()
-            print(f'Details body: {details_text[:500]}')
+            hour = int(time_display.split(':')[0])
+            minute = int(time_display.split(':')[1])
+            if hour >= 12:
+                ampm = 'PM'
+                display_hour = hour if hour == 12 else hour - 12
+            else:
+                ampm = 'AM'
+                display_hour = hour if hour != 0 else 12
+            time_label = f'{display_hour}:{minute:02d} {ampm}'
 
-            if details_response.status != 200:
+            url = f'https://resy.com/cities/ny/{slug}?date={date}&seats={party_size}'
+            print(f'Booking: navigating to {url}')
+
+            booked: list[dict] = []
+
+            async def capture_book(response):
+                if 'api.resy.com/3/book' in response.url:
+                    try:
+                        body = await response.body()
+                        booked.append(
+                            {'status': response.status, 'body': body.decode()}
+                        )
+                        print(
+                            f'BOOK RESPONSE: status={response.status} body={body.decode()[:300]}'
+                        )
+                    except Exception as e:
+                        print(f'Book capture error: {e}')
+
+            page.on('response', capture_book)
+            await page.goto(url)
+            await page.wait_for_load_state('domcontentloaded')
+            await asyncio.sleep(4)
+
+            print(f'Looking for time slot: {time_label}')
+            clicked = False
+            for selector in [
+                f'button:has-text("{time_label}")',
+                f'[class*="ReservationButton"]:has-text("{time_label}")',
+                f'[class*="Button"]:has-text("{time_label}")',
+                f'button[data-test*="slot"]:has-text("{time_label}")',
+            ]:
+                try:
+                    await page.locator(selector).first.click(timeout=3000)
+                    print(f'Clicked time slot: {time_label}')
+                    clicked = True
+                    break
+                except Exception:
+                    continue
+
+            if not clicked:
+                try:
+                    buttons = await page.locator('button').all_text_contents()
+                    print(
+                        f'Available buttons: {[b for b in buttons if b.strip()][:20]}'
+                    )
+                except Exception:
+                    pass
+                print(f'Could not find time slot button for {time_label}')
+                page.remove_listener('response', capture_book)
                 return False
 
-            details = await details_response.json()
-            book_token = details.get('book_token', {}).get('value')
+            await asyncio.sleep(2)
 
-            if not book_token:
-                print(f'No book token. Keys: {list(details.keys())}')
-                return False
+            for selector in [
+                'button:has-text("Book Now")',
+                'button:has-text("Reserve")',
+                'button:has-text("Confirm")',
+                'button[type="submit"]:has-text("Book")',
+                '[class*="book"]:has-text("Book")',
+            ]:
+                try:
+                    await page.locator(selector).first.click(timeout=3000)
+                    print('Clicked book button')
+                    break
+                except Exception:
+                    continue
 
-            print(f'Got book token: {book_token[:50]}')
+            await asyncio.sleep(4)
+            page.remove_listener('response', capture_book)
 
-            book_response = await page.request.post(
-                'https://api.resy.com/3/book',
-                headers={
-                    'authorization': self.api_key,
-                    'x-resy-auth-token': self.auth_token,
-                    'x-resy-universal-auth': self.auth_token,
-                    'x-resy-universal-app': 'true',
-                    'accept': 'application/json, text/plain, */*',
-                    'content-type': 'application/x-www-form-urlencoded',
-                    'origin': 'https://resy.com',
-                    'referer': 'https://resy.com/',
-                    'x-origin': 'https://resy.com',
-                    'cache-control': 'no-cache',
-                },
-                form={
-                    'book_token': book_token,
-                    'struct_payment_method': json.dumps(
-                        {'id': int(payment_method_id)}
-                    ),
-                    'source_id': 'resy.com-venue-details',
-                },
-            )
-            print(f'Book status: {book_response.status}')
-            book_text = await book_response.text()
-            print(f'Book body: {book_text[:500]}')
-
-            if book_response.status == 201:
+            if booked and booked[0]['status'] == 201:
                 print(
                     f'*** SUCCESSFULLY BOOKED: {slug} {date} {time_str} ***'
                 )
                 return True
-            else:
+            if booked:
+                print(f'Booking attempted, status: {booked[0]["status"]}')
                 return False
+            print('No booking response captured')
+            return False
 
         except Exception as e:
             print(f'book_slot error: {e}')
