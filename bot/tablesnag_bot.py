@@ -290,145 +290,108 @@ class TableSnagBot:
             )
             return True
         try:
-            # Extract just the time portion e.g. "17:00"
-            time_display = (
-                time_str.split(' ')[1][:5] if ' ' in time_str else time_str[:5]
-            )
-            hour = int(time_display.split(':')[0])
-            minute = int(time_display.split(':')[1])
-            if hour >= 12:
-                ampm = 'PM'
-                display_hour = hour if hour == 12 else hour - 12
-            else:
-                ampm = 'AM'
-                display_hour = hour if hour != 0 else 12
-            time_label = f'{display_hour}:{minute:02d} {ampm}'
-
-            url = f'https://resy.com/cities/ny/{slug}?date={date}&seats={party_size}'
-            print(f'Booking: navigating to {url}')
-
-            booked: list[dict] = []
-
-            async def capture_book(response):
-                if 'api.resy.com/3/book' in response.url:
-                    try:
-                        body = await response.body()
-                        booked.append(
-                            {'status': response.status, 'body': body.decode()}
-                        )
-                        print(
-                            f'BOOK RESPONSE: status={response.status} body={body.decode()[:300]}'
-                        )
-                    except Exception as e:
-                        print(f'Book capture error: {e}')
-
-            page.on('response', capture_book)
-            await page.goto(url)
-            await page.wait_for_load_state('domcontentloaded')
-            await asyncio.sleep(4)
-
-            print(f'Looking for time slot: {time_label}')
-            clicked = False
-            for selector in [
-                f'button:has-text("{time_label}")',
-                f'[class*="ReservationButton"]:has-text("{time_label}")',
-                f'[class*="Button"]:has-text("{time_label}")',
-                f'button[data-test*="slot"]:has-text("{time_label}")',
-            ]:
-                try:
-                    await page.locator(selector).first.click(timeout=3000)
-                    print(f'Clicked time slot: {time_label}')
-                    clicked = True
-                    break
-                except Exception:
-                    continue
-
-            if not clicked:
-                try:
-                    buttons = await page.locator('button').all_text_contents()
-                    print(
-                        f'Available buttons: {[b for b in buttons if b.strip()][:20]}'
-                    )
-                except Exception:
-                    pass
-                print(f'Could not find time slot button for {time_label}')
-                page.remove_listener('response', capture_book)
+            payment_method_id = os.getenv('RESY_PAYMENT_METHOD_ID', '').strip()
+            if not payment_method_id:
+                print('RESY_PAYMENT_METHOD_ID not set; cannot complete booking.')
                 return False
 
-            await asyncio.sleep(3)
+            print(f'Attempting to book {slug} {date} {time_str}')
 
-            print('Waiting for checkout panel...')
-            try:
-                await page.wait_for_selector(
-                    '[class*="CheckoutFlow"], [class*="checkout"], [class*="Checkout"], '
-                    '[class*="BookingFlow"], [class*="booking-flow"], '
-                    '[class*="ReservationOverlay"], [class*="Modal"], [class*="modal"], '
-                    '[class*="drawer"], [class*="Drawer"], [class*="panel"], [class*="Panel"]',
-                    timeout=8000,
-                )
-                print('Checkout panel appeared')
-            except Exception:
-                print('Checkout panel selector timed out')
+            details_result = await page.evaluate(
+                """async (args) => {
+                    const params = new URLSearchParams({
+                        config_id: args.config_token,
+                        party_size: String(args.party_size),
+                        day: args.date
+                    });
+                    const resp = await fetch(
+                        'https://api.resy.com/3/details?' + params.toString(),
+                        {
+                            method: 'GET',
+                            credentials: 'include',
+                            headers: {
+                                'authorization': args.api_key,
+                                'x-resy-auth-token': args.auth_token,
+                                'x-resy-universal-auth': args.auth_token,
+                                'x-resy-universal-app': 'true',
+                                'accept': 'application/json',
+                                'origin': 'https://resy.com',
+                                'x-origin': 'https://resy.com',
+                            }
+                        }
+                    );
+                    const text = await resp.text();
+                    return { status: resp.status, body: text };
+                }""",
+                {
+                    'config_token': config_token,
+                    'party_size': party_size,
+                    'date': date,
+                    'api_key': self.api_key,
+                    'auth_token': self.auth_token,
+                },
+            )
 
-            await asyncio.sleep(2)
-            await page.screenshot(path='debug_after_slot_click.png')
+            print(f'Details status: {details_result["status"]}')
+            print(f'Details body: {details_result["body"][:500]}')
 
-            try:
-                all_buttons = await page.locator('button').all_text_contents()
-                print(
-                    f'All buttons: {[b.strip() for b in all_buttons if b.strip()]}'
-                )
-            except Exception:
-                pass
+            if details_result['status'] != 200:
+                print('Details failed')
+                return False
 
-            try:
-                book_elements = await page.locator(
-                    '[class*="book" i], [class*="reserve" i], [class*="checkout" i]'
-                ).all_text_contents()
-                print(f'Book-related elements: {book_elements[:10]}')
-            except Exception:
-                pass
+            details = json.loads(details_result['body'])
+            book_token = details.get('book_token', {}).get('value')
 
-            book_clicked = False
-            for selector in [
-                'button:has-text("Book Now")',
-                'button:has-text("Reserve")',
-                'button:has-text("Confirm")',
-                'button:has-text("Book")',
-                '[class*="book"]',
-                '[class*="Book"]',
-                '[class*="reserve"]',
-                '[class*="Reserve"]',
-                '[class*="checkout"]',
-                '[class*="Checkout"]',
-                'button[type="submit"]',
-            ]:
-                try:
-                    el = page.locator(selector).first
-                    if await el.is_visible(timeout=1000):
-                        await el.click(timeout=3000)
-                        print(f'Clicked book button with selector: {selector}')
-                        book_clicked = True
-                        break
-                except Exception:
-                    continue
+            if not book_token:
+                print(f'No book token. Keys: {list(details.keys())}')
+                return False
 
-            if not book_clicked:
-                print('Could not find any book button')
-                await page.screenshot(path='debug_no_book_button.png')
+            print(f'Got book token: {book_token[:50]}')
 
-            await asyncio.sleep(4)
-            page.remove_listener('response', capture_book)
+            book_result = await page.evaluate(
+                """async (args) => {
+                    const body = new URLSearchParams({
+                        book_token: args.book_token,
+                        struct_payment_method: JSON.stringify({
+                            id: parseInt(args.payment_method_id, 10)
+                        }),
+                        source_id: 'resy.com-venue-details'
+                    });
+                    const resp = await fetch('https://api.resy.com/3/book', {
+                        method: 'POST',
+                        credentials: 'include',
+                        headers: {
+                            'authorization': args.api_key,
+                            'x-resy-auth-token': args.auth_token,
+                            'x-resy-universal-auth': args.auth_token,
+                            'x-resy-universal-app': 'true',
+                            'content-type': 'application/x-www-form-urlencoded',
+                            'accept': 'application/json',
+                            'origin': 'https://resy.com',
+                            'x-origin': 'https://resy.com',
+                        },
+                        body: body.toString()
+                    });
+                    const text = await resp.text();
+                    return { status: resp.status, body: text };
+                }""",
+                {
+                    'book_token': book_token,
+                    'payment_method_id': str(payment_method_id),
+                    'api_key': self.api_key,
+                    'auth_token': self.auth_token,
+                },
+            )
 
-            if booked and booked[0]['status'] == 201:
+            print(f'Book status: {book_result["status"]}')
+            print(f'Book body: {book_result["body"][:500]}')
+
+            if book_result['status'] == 201:
                 print(
                     f'*** SUCCESSFULLY BOOKED: {slug} {date} {time_str} ***'
                 )
                 return True
-            if booked:
-                print(f'Booking attempted, status: {booked[0]["status"]}')
-                return False
-            print('No booking response captured')
+            print('Booking failed')
             return False
 
         except Exception as e:
