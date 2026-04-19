@@ -357,19 +357,46 @@ class TableSnagBot:
 
             await asyncio.sleep(2)
 
+            await page.screenshot(path='debug_after_slot_click.png')
+            print('Screenshot saved - checking for booking drawer')
+
+            try:
+                all_buttons = await page.locator('button').all_text_contents()
+                print(
+                    f'Buttons after slot click: {[b.strip() for b in all_buttons if b.strip()]}'
+                )
+            except Exception as e:
+                print(f'Button scan error: {e}')
+
+            await asyncio.sleep(3)
+
+            book_clicked = False
             for selector in [
                 'button:has-text("Book Now")',
                 'button:has-text("Reserve")',
                 'button:has-text("Confirm")',
-                'button[type="submit"]:has-text("Book")',
-                '[class*="book"]:has-text("Book")',
+                'button:has-text("Book")',
+                '[class*="book"]',
+                '[class*="Book"]',
+                '[class*="reserve"]',
+                '[class*="Reserve"]',
+                '[class*="checkout"]',
+                '[class*="Checkout"]',
+                'button[type="submit"]',
             ]:
                 try:
-                    await page.locator(selector).first.click(timeout=3000)
-                    print('Clicked book button')
-                    break
+                    el = page.locator(selector).first
+                    if await el.is_visible(timeout=1000):
+                        await el.click(timeout=3000)
+                        print(f'Clicked book button with selector: {selector}')
+                        book_clicked = True
+                        break
                 except Exception:
                     continue
+
+            if not book_clicked:
+                print('Could not find any book button')
+                await page.screenshot(path='debug_no_book_button.png')
 
             await asyncio.sleep(4)
             page.remove_listener('response', capture_book)
