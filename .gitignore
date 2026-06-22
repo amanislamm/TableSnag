@@ -67,6 +67,12 @@ htmlcov/
 celerybeat-schedule
 celerybeat.pid
 
+# Bot debug artifacts (regenerated at runtime)
+debug_*.png
+
+# Backups / scratch copies
+*_backup.py
+
 # Misc
 *.log
 *.sqlite
